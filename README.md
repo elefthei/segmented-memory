@@ -1,4 +1,4 @@
-# Memory in Arkworks
+# Segmented Memory for R1CS
 
 This repo contains our implementation of segmented memory as described in the [Coral paper](https://eprint.iacr.org/2025/1420.pdf).
 
