@@ -921,7 +921,9 @@ impl<F: ArkPrimeField> RunningMem<F> {
         assert_eq!(zn[3], N1::from(1));
 
         // stacks
-        for z in &zn[11..] {
+        let n_stacks = self.stack_ptrs.len();
+        let stack_base = 11;
+        for z in &zn[stack_base..stack_base + n_stacks] {
             assert_eq!(*z, N1::from(0));
         }
 
