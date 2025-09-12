@@ -905,6 +905,12 @@ impl<F: ArkPrimeField> RunningMem<F> {
         self.mem_spaces.get(&tag).unwrap().tag()
     }
 
+    pub fn get_stack_ptr<'a>(&self, tag: usize, w: &'a RunningMemWires<F>) -> &'a FpVar<F> {
+        let ty = self.mem_spaces.get(&tag).unwrap();
+        assert!(ty.is_stack());
+        &w.stack_ptrs[ty.tag()]
+    }
+
     pub fn verifier_checks(&self, zn: &[N1], acc_cmt: &[N2]) {
         assert!(self.verifier_mode);
 
