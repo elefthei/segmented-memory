@@ -733,8 +733,8 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             .map(|m| m.elem_len())
             .max()
             .unwrap_or_default();
-        main_chunk_len += (scan_priv_per_batch + scan_pub_per_batch) * (3 + max_elem_len);
-        sep_chunk_len += (scan_priv_per_batch) * (3 + max_elem_len);
+        main_chunk_len += (scan_priv_per_batch) * (3 + max_elem_len);
+        sep_chunk_len += (scan_priv_per_batch + scan_pub_per_batch) * (3 + max_elem_len);
         assert_eq!(
             heap_batch_sizes.len() + stk_batch_sizes.len(),
             self.mem_spaces.len()
@@ -1795,84 +1795,88 @@ mod tests {
 
         let ro_consts = ROConstants::<E1>::default();
 
-        let (blinds, ram_hints, ram_batch_sizes, mut rm) = mem_builder.new_running_mem(
-            ro_consts.clone(),
-            heap_batch_sizes,
-            stk_batch_sizes,
-            false,
-            "./ppot_0080_20.ptau",
-        );
-
-        let verifier_rm = rm.get_dummy();
-
-        // nova
-        let mut circuit_primary = make_full_mem_circ(0, &mut rm, do_rw_ops, num_iters == 1);
-
-        let z0_primary_full = circuit_primary.get_zi();
-
-        let z0_primary = z0_primary_full[ram_batch_sizes.iter().sum()..].to_vec();
-
-        // produce public parameters
-        let pp = PublicParams::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::setup(
-            &mut circuit_primary,
-            &*default_ck_hint(),
-            &*default_ck_hint(),
-            ram_batch_sizes.clone(),
-            Some("./ppot_0080_20.ptau"),
-        )
-        .unwrap();
-
-        // produce a recursive SNARK
-        let mut recursive_snark = RecursiveSNARK::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::new(
-            &pp,
-            &mut circuit_primary,
-            &z0_primary,
-            Some(blinds[0].clone()),
-            ram_hints[0].clone(),
-            ram_batch_sizes.clone(),
-        )
-        .unwrap();
-
-        for i in 0..num_iters {
-            println!("==============================================");
-            let res = recursive_snark.prove_step(
-                &pp,
-                &mut circuit_primary,
-                Some(blinds[i].clone()),
-                ram_hints[i].clone(),
-                ram_batch_sizes.clone(),
+        for sep_final in vec![true, false] {
+            let (blinds, ram_hints, ram_batch_sizes, mut rm) = mem_builder.clone().new_running_mem(
+                ro_consts.clone(),
+                heap_batch_sizes.clone(),
+                stk_batch_sizes.clone(),
+                sep_final,
+                "./ppot_0080_20.ptau",
             );
-            assert!(res.is_ok());
-            res.unwrap();
 
-            // verify the recursive SNARK
-            let res = recursive_snark.verify(&pp, i + 1, &z0_primary);
-            assert!(res.is_ok());
+            let verifier_rm = rm.get_dummy();
 
-            if i < num_iters - 1 {
-                circuit_primary = make_full_mem_circ(i + 1, &mut rm, do_rw_ops, i == num_iters - 2);
+            // nova
+            let mut circuit_primary = make_full_mem_circ(0, &mut rm, do_rw_ops, num_iters == 1);
+
+            let z0_primary_full = circuit_primary.get_zi();
+
+            let z0_primary = z0_primary_full[ram_batch_sizes.iter().sum()..].to_vec();
+
+            // produce public parameters
+            let pp = PublicParams::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::setup(
+                &mut circuit_primary,
+                &*default_ck_hint(),
+                &*default_ck_hint(),
+                ram_batch_sizes.clone(),
+                Some("./ppot_0080_20.ptau"),
+            )
+            .unwrap();
+
+            // produce a recursive SNARK
+            let mut recursive_snark =
+                RecursiveSNARK::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::new(
+                    &pp,
+                    &mut circuit_primary,
+                    &z0_primary,
+                    Some(blinds[0].clone()),
+                    ram_hints[0].clone(),
+                    ram_batch_sizes.clone(),
+                )
+                .unwrap();
+
+            for i in 0..num_iters {
+                println!("==============================================");
+                let res = recursive_snark.prove_step(
+                    &pp,
+                    &mut circuit_primary,
+                    Some(blinds[i].clone()),
+                    ram_hints[i].clone(),
+                    ram_batch_sizes.clone(),
+                );
+                assert!(res.is_ok());
+                res.unwrap();
+
+                // verify the recursive SNARK
+                let res = recursive_snark.verify(&pp, i + 1, &z0_primary);
+                assert!(res.is_ok());
+
+                if i < num_iters - 1 {
+                    circuit_primary =
+                        make_full_mem_circ(i + 1, &mut rm, do_rw_ops, i == num_iters - 2);
+                }
             }
+
+            // produce the prover and verifier keys for compressed snark
+            let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap();
+
+            // produce a compressed SNARK
+            let random_layer: RandomLayer<E1, E2> =
+                CompressedSNARK::<_, _, _, S1, S2>::sample_random_layer(&pp).unwrap();
+            let res =
+                CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark, random_layer);
+            assert!(res.is_ok());
+            let compressed_snark = res.unwrap();
+
+            // verify the compressed SNARK
+            let res = compressed_snark.verify(&vk, num_iters, &z0_primary);
+            assert!(res.is_ok());
+
+            // check final cmt outputs
+            let (zn, ci) = res.unwrap();
+
+            verifier_rm.verifier_checks(&zn, &ci, ro_consts.clone());
         }
-
-        // produce the prover and verifier keys for compressed snark
-        let (pk, vk) = CompressedSNARK::<_, _, _, S1, S2>::setup(&pp).unwrap();
-
-        // produce a compressed SNARK
-        let random_layer: RandomLayer<E1, E2> =
-            CompressedSNARK::<_, _, _, S1, S2>::sample_random_layer(&pp).unwrap();
-        let res =
-            CompressedSNARK::<_, _, _, S1, S2>::prove(&pp, &pk, &recursive_snark, random_layer);
-        assert!(res.is_ok());
-        let compressed_snark = res.unwrap();
-
-        // verify the compressed SNARK
-        let res = compressed_snark.verify(&vk, num_iters, &z0_primary);
-        assert!(res.is_ok());
-
-        // check final cmt outputs
-        let (zn, ci) = res.unwrap();
-
-        verifier_rm.verifier_checks(&zn, &ci, ro_consts);
     }
 
     #[test]
