@@ -456,7 +456,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         pub_fs: &[MemElem<F>],
         padding: &MemElem<F>,
     ) -> (Vec<N2>, Vec<Vec<N1>>, Vec<Vec<N1>>) {
-        let num_cmts = if sep_final { 3 } else { 1 };
+        let num_cmts = if sep_final { 2 } else { 1 };
 
         let mut ci: Vec<Option<N2>> = vec![None; num_cmts];
         // let mut inner_commits: Vec<Vec<Option<Commitment<E1>>>> =
@@ -634,16 +634,17 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         sep_final: bool,                       // true -> cmts/ivcify =  [is], [rs, ws], [fs]
         // false -> cmts/ivcify = [is, rs, ws, fs]
         path: P,
-    ) -> (Vec<Vec<N1>>, Vec<Vec<N1>>, usize, RunningMem<F>) {
+    ) -> (Vec<Vec<N1>>, Vec<Vec<N1>>, Vec<usize>, RunningMem<F>) {
         let mut read_batch_size = 0;
         let mut write_batch_size = 0;
-        let mut key_len = 0;
+        let mut main_chunk_len = 0;
+        let mut sep_chunk_len = 0;
         for (t, b) in &heap_batch_sizes {
             let m = self.mem_spaces.get(&t).unwrap();
             if m.is_stack() {
                 panic!("tag relates to stack memory");
             } else {
-                key_len += 2 * b * (3 + m.elem_len());
+                main_chunk_len += 2 * b * (3 + m.elem_len());
                 read_batch_size += b;
                 write_batch_size += b;
             }
@@ -656,7 +657,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             } else {
                 read_batch_size += pop_b;
                 write_batch_size += push_b;
-                key_len += (push_b + pop_b) * (3 + m.elem_len());
+                main_chunk_len += (push_b + pop_b) * (3 + m.elem_len());
             }
         }
 
@@ -732,12 +733,14 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             .map(|m| m.elem_len())
             .max()
             .unwrap_or_default();
-        key_len += (scan_priv_per_batch * 2 + scan_pub_per_batch) * (3 + max_elem_len);
+        main_chunk_len += (scan_priv_per_batch + scan_pub_per_batch) * (3 + max_elem_len);
+        sep_chunk_len += (scan_priv_per_batch) * (3 + max_elem_len);
         assert_eq!(
             heap_batch_sizes.len() + stk_batch_sizes.len(),
             self.mem_spaces.len()
         );
 
+        let key_len = main_chunk_len + sep_chunk_len;
         let ic_gens = Incremental::<E1, E2>::setup(key_len, path);
 
         // this is for scan
@@ -756,6 +759,11 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             &padding,
         );
         //println!("RAM HINTS {:#?}", ram_hints);
+        let ram_batch_sizes = if sep_final {
+            vec![main_chunk_len, sep_chunk_len]
+        } else {
+            vec![key_len]
+        };
 
         let nova_perm_chal = sample_challenges(&ic_cmt, ro_consts);
         let mut perm_chal = vec![
@@ -804,7 +812,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
 
         rm.pub_hash = rm.get_pub_is_hash();
 
-        (blinds, ram_hints, key_len, rm)
+        (blinds, ram_hints, ram_batch_sizes, rm)
     }
 }
 
@@ -1787,7 +1795,7 @@ mod tests {
 
         let ro_consts = ROConstants::<E1>::default();
 
-        let (blinds, ram_hints, z_memory_len, mut rm) = mem_builder.new_running_mem(
+        let (blinds, ram_hints, ram_batch_sizes, mut rm) = mem_builder.new_running_mem(
             ro_consts.clone(),
             heap_batch_sizes,
             stk_batch_sizes,
@@ -1802,10 +1810,9 @@ mod tests {
 
         let z0_primary_full = circuit_primary.get_zi();
 
-        let z0_primary = z0_primary_full[z_memory_len..].to_vec();
+        let z0_primary = z0_primary_full[ram_batch_sizes.iter().sum()..].to_vec();
 
         // produce public parameters
-        let ram_batch_sizes = vec![z_memory_len];
         let pp = PublicParams::<E1, E2, FCircuit<<E1 as Engine>::Scalar>>::setup(
             &mut circuit_primary,
             &*default_ck_hint(),
