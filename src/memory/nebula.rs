@@ -628,6 +628,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
     // consumes the mem builder object
     pub fn new_running_mem<P: AsRef<Path>>(
         mut self,
+        ro_consts: ROConstants<E1>,
         heap_batch_sizes: Vec<(usize, usize)>, // (tag, batch size)
         stk_batch_sizes: Vec<(usize, usize, usize)>, // (tag, push batch size, pop batch size)
         sep_final: bool,                       // true -> cmts/ivcify =  [is], [rs, ws], [fs]
@@ -756,7 +757,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         );
         //println!("RAM HINTS {:#?}", ram_hints);
 
-        let nova_perm_chal = sample_challenges(&ic_cmt);
+        let nova_perm_chal = sample_challenges(&ic_cmt, ro_consts);
         let mut perm_chal = vec![
             nova_to_ark_field::<N1, F>(&nova_perm_chal[0]),
             nova_to_ark_field::<N1, F>(&nova_perm_chal[1]),
@@ -911,7 +912,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         &w.stack_ptrs[ty.tag()]
     }
 
-    pub fn verifier_checks(&self, zn: &[N1], acc_cmt: &[N2]) {
+    pub fn verifier_checks(&self, zn: &[N1], acc_cmt: &[N2], ro_consts: ROConstants<E1>) {
         assert!(self.verifier_mode);
 
         // pub hash
@@ -933,7 +934,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
         }
 
         // randomness correct
-        let nova_perm_chal = sample_challenges(acc_cmt);
+        let nova_perm_chal = sample_challenges(acc_cmt, ro_consts);
         assert_eq!(nova_perm_chal[0], zn[0]);
         assert_eq!(nova_perm_chal[1], zn[1]);
     }
@@ -1726,8 +1727,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
 }
 
 // deterministic
-pub fn sample_challenges(ic_cmts: &[N2]) -> [N1; 2] {
-    let ro_consts = ROConstants::<E1>::default();
+pub fn sample_challenges(ic_cmts: &[N2], ro_consts: ROConstants<E1>) -> [N1; 2] {
     let mut hasher = <E1 as Engine>::RO::new(ro_consts);
     for c in ic_cmts {
         hasher.absorb(*c);
@@ -1785,7 +1785,10 @@ mod tests {
         type S1 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E1, EE1>;
         type S2 = nova_snark::spartan::snark::RelaxedR1CSSNARK<E2, EE2>;
 
+        let ro_consts = ROConstants::<E1>::default();
+
         let (blinds, ram_hints, z_memory_len, mut rm) = mem_builder.new_running_mem(
+            ro_consts.clone(),
             heap_batch_sizes,
             stk_batch_sizes,
             false,
@@ -1862,7 +1865,7 @@ mod tests {
         // check final cmt outputs
         let (zn, ci) = res.unwrap();
 
-        verifier_rm.verifier_checks(&zn, &ci);
+        verifier_rm.verifier_checks(&zn, &ci, ro_consts);
     }
 
     #[test]
