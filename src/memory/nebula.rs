@@ -280,6 +280,22 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         read_elem.vals
     }
 
+    // don't record this operation
+    pub fn nondet_read(&self, addr: usize, tag: usize) -> Vec<F> {
+        let ty = self.mem_spaces.get(&tag).unwrap();
+        assert!(!ty.is_stack());
+        let sr = ty.tag();
+
+        let read_elem = if self.mem.contains_key(&(addr, sr)) {
+            let re = self.mem.get(&(addr, sr)).unwrap().clone();
+            assert_eq!(re.addr, F::from(addr as u64));
+            re
+        } else {
+            panic!("Uninitialized memory addr")
+        };
+        read_elem.vals
+    }
+
     pub fn read(&mut self, addr: usize, tag: usize) -> Vec<F> {
         self.cond_read(true, addr, tag)
     }
