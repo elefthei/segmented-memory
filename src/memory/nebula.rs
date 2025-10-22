@@ -281,12 +281,14 @@ impl<F: ArkPrimeField> MemBuilder<F> {
     }
 
     // don't record this operation
-    pub fn nondet_read(&self, addr: usize, tag: usize) -> Vec<F> {
+    pub fn cond_nondet_read(&self, cond: bool, addr: usize, tag: usize) -> Vec<F> {
         let ty = self.mem_spaces.get(&tag).unwrap();
         assert!(!ty.is_stack());
         let sr = ty.tag();
 
-        let read_elem = if self.mem.contains_key(&(addr, sr)) {
+        let read_elem = if !cond {
+            MemElem::padding(addr, ty.elem_len())
+        } else if self.mem.contains_key(&(addr, sr)) {
             let re = self.mem.get(&(addr, sr)).unwrap().clone();
             assert_eq!(re.addr, F::from(addr as u64));
             re
