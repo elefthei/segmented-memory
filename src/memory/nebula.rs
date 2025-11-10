@@ -213,6 +213,12 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         }
     }
 
+    pub fn get_stack_ptr(&self, tag: usize) -> usize {
+        let ty = self.mem_spaces.get(&tag).unwrap();
+        assert!(ty.is_stack());
+        self.stack_ptrs[ty.tag()]
+    }
+
     pub fn push(&mut self, tag: usize, vals: Vec<F>) {
         self.cond_push(true, tag, vals)
     }
