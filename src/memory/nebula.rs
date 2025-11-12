@@ -827,11 +827,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             running_rs: F::ONE,
             running_ws: F::ONE,
             running_fs: F::ONE,
-            stack_ptrs: self
-                .stack_ptrs
-                .iter()
-                .map(|sp| F::from(*sp as u64))
-                .collect(),
+            stack_ptrs: vec![F::ZERO; self.stack_ptrs.len()],
         };
 
         rm.pub_hash = rm.get_pub_is_hash();
