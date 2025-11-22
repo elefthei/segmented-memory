@@ -159,7 +159,7 @@ impl Valid for MemType {
 }
 
 //nova elt
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ICCmt {
     v: Vec<N2>,
 }
