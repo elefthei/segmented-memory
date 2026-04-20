@@ -16,7 +16,6 @@ use nova_snark::{
     provider::{hyperkzg::Commitment, incremental::Incremental},
     traits::{Engine, ROConstants, ROTrait},
 };
-use rayon::prelude::*;
 use std::collections::HashMap;
 //use rustc_hash::FxHashMap as HashMap;
 use serde::{Deserialize, Serialize};
@@ -520,7 +519,7 @@ impl<F: ArkPrimeField> MemBuilder<F> {
         //let mut ram_hints = vec![Vec::new(); num_iters];
 
         let zipped: Vec<(Vec<Commitment<E1>>, Vec<N1>, Vec<N1>)> = (0..num_iters)
-            .into_par_iter()
+            .into_iter()
             .map(|i| {
                 let mut is_hint = Vec::new();
                 let mut rs_hint = Vec::new();
@@ -1030,7 +1029,17 @@ impl<F: ArkPrimeField> MemBuilder<F> {
             stack_ptrs: vec![F::ZERO; self.stack_ptrs.len()],
         };
 
-        rm.pub_hash = rm.get_pub_is_hash();
+        // NOTE: we deliberately do **not** call `rm.get_pub_is_hash()` here.
+        // That method multiplies `perm_chal`-derived hashes across `pub_is`
+        // using `par_iter`, which would trigger rayon's global-pool init —
+        // and rayon's init reads `RAYON_NUM_THREADS` from the environment,
+        // a syscall the Risc0 zkVM guest does not support.
+        //
+        // `pub_hash` is only read by the SNARK commitment/verification path,
+        // which this pure variant disables via `verifier_mode = true`.
+        // Consumers of the pure variant (notably `AST::get_lower_info` +
+        // `LowerInfo::lower_to_wasm`) read only `mem_wits`.
+        rm.pub_hash = F::ONE;
 
         rm
     }
@@ -1172,7 +1181,7 @@ impl<F: ArkPrimeField> RunningMem<F> {
     // can be called by prove on real RunningMem or by Verifier on dummy to produce same result
     pub fn get_pub_is_hash(&self) -> F {
         self.pub_is
-            .par_iter()
+            .iter()
             .map(|e| e.hash(&self.perm_chal))
             .product::<F>()
     }
