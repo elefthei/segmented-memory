@@ -882,6 +882,158 @@ impl<F: ArkPrimeField> MemBuilder<F> {
 
         (blinds, ram_hints, ram_batch_sizes, rm)
     }
+
+    /// Pure-witness variant of [`new_running_mem`] that **does not** build
+    /// a KZG commitment key, compute incremental commitments, or sample
+    /// Nova permutation challenges. It performs only the witness-table
+    /// population needed by consumers such as `lower_to_wasm`, which read
+    /// the populated `mem_wits` map but never touch the SNARK commitment
+    /// fields (`ic_cmt`, `perm_chal`, `running_*`).
+    ///
+    /// Use this when the caller only needs to lower the AST back to WAT
+    /// (e.g. inside a zkVM guest with no filesystem access, so the ptau
+    /// file required by `Incremental::setup` cannot be loaded). The
+    /// returned `RunningMem` is marked `verifier_mode = true` so any
+    /// accidental SNARK-path invocation will fail loudly rather than
+    /// read the zeroed commitment/challenge fields.
+    pub fn new_running_mem_pure(
+        mut self,
+        heap_batch_sizes: Vec<(usize, usize)>,
+        stk_batch_sizes: Vec<(usize, usize, usize)>,
+    ) -> RunningMem<F> {
+        let mut read_batch_size = 0;
+        let mut write_batch_size = 0;
+        for (t, b) in &heap_batch_sizes {
+            let m = self.mem_spaces.get(&t).unwrap();
+            if m.is_stack() {
+                panic!("tag relates to stack memory");
+            } else {
+                read_batch_size += b;
+                write_batch_size += b;
+            }
+        }
+        for (t, push_b, pop_b) in &stk_batch_sizes {
+            let m = self.mem_spaces.get(&t).unwrap();
+            if !m.is_stack() {
+                panic!("tag relates to heap memory");
+            } else {
+                read_batch_size += pop_b;
+                write_batch_size += push_b;
+            }
+        }
+
+        assert!(
+            !self.rs.is_empty()
+                && !self.ws.is_empty()
+                && read_batch_size > 0
+                && write_batch_size > 0
+        );
+        assert_eq!(self.rs.len() % read_batch_size, 0);
+        assert_eq!(self.ws.len() % write_batch_size, 0);
+        let num_iters = self.rs.len() / read_batch_size;
+        assert_eq!(num_iters, self.ws.len() / write_batch_size);
+
+        let mut priv_fs: Vec<MemElem<F>> = self.priv_fs.clone().into_values().collect();
+        let mut pub_fs: Vec<MemElem<F>> = self.pub_fs.clone().into_values().collect();
+        self.priv_is
+            .sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+        priv_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+        pub_fs.sort_by(|a, b| a.addr.partial_cmp(&b.addr).unwrap());
+
+        let first_pub_addr = if !pub_fs.is_empty() {
+            pub_fs[0].addr
+        } else {
+            F::ZERO
+        };
+        let first_priv_addr = if !priv_fs.is_empty() {
+            priv_fs[0].addr
+        } else {
+            F::ZERO
+        };
+
+        assert_eq!(priv_fs.len(), self.priv_is.len());
+        assert_eq!(pub_fs.len(), self.pub_is.len());
+
+        let mut mem_wits = new_hash_map();
+        for elem in &mut self.pub_is {
+            mem_wits.insert((elem.addr, ark_to_u64(&elem.sr) as usize), elem.clone());
+            elem.vals
+                .extend(vec![F::ZERO; self.max_elem_len - elem.vals.len()]);
+        }
+        for elem in &mut self.priv_is {
+            mem_wits.insert((elem.addr, ark_to_u64(&elem.sr) as usize), elem.clone());
+            elem.vals
+                .extend(vec![F::ZERO; self.max_elem_len - elem.vals.len()]);
+        }
+
+        let scan_priv_per_batch = if !self.priv_is.is_empty() && !priv_fs.is_empty() {
+            ((self.priv_is.len() as f32) / (num_iters as f32)).ceil() as usize
+        } else {
+            0
+        };
+        let scan_pub_per_batch = if !self.pub_is.is_empty() && !pub_fs.is_empty() {
+            ((self.pub_is.len() as f32) / (num_iters as f32)).ceil() as usize
+        } else {
+            0
+        };
+
+        let sr_bit_limit = logmn(self.mem_spaces.len());
+        let time_bit_limit = logmn(self.ts);
+        assert!(time_bit_limit <= 32);
+        let addr_bit_limit = logmn(self.max_addr);
+        assert!(addr_bit_limit <= 254 - 34);
+
+        let max_elem_len = self
+            .mem_spaces
+            .values()
+            .map(|m| m.elem_len())
+            .max()
+            .unwrap_or_default();
+        assert_eq!(
+            heap_batch_sizes.len() + stk_batch_sizes.len(),
+            self.mem_spaces.len()
+        );
+
+        let padding = MemElem::padding(0, max_elem_len);
+
+        // SNARK-only fields are zeroed. They are only read on the SNARK
+        // prove / verify path, which is disabled via `verifier_mode`.
+        let perm_chal = vec![F::ZERO; max_elem_len + 1];
+        let ic_cmt = ICCmt::new(Vec::new());
+
+        let mut rm = RunningMem {
+            priv_is: self.priv_is,
+            pub_is: self.pub_is,
+            mem_wits,
+            priv_fs,
+            pub_fs,
+            pub_hash: F::one(),
+            ts: F::zero(),
+            perm_chal,
+            scan_priv_per_batch,
+            scan_pub_per_batch,
+            priv_s: 0,
+            pub_s: 0,
+            mem_spaces: self.mem_spaces,
+            padding,
+            time_bit_limit,
+            addr_bit_limit,
+            sr_bit_limit,
+            verifier_mode: true,
+            ic_cmt,
+            running_priv_i: first_priv_addr,
+            running_pub_i: first_pub_addr,
+            running_is: F::ONE,
+            running_rs: F::ONE,
+            running_ws: F::ONE,
+            running_fs: F::ONE,
+            stack_ptrs: vec![F::ZERO; self.stack_ptrs.len()],
+        };
+
+        rm.pub_hash = rm.get_pub_is_hash();
+
+        rm
+    }
 }
 
 #[derive(
